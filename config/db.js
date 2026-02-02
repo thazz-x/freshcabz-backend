@@ -1,19 +1,23 @@
 // config/db.js
 const { Pool } = require('pg');
+require('dotenv').config();
 
 const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_DATABASE,
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT,
+  // Em vez de user, host, password separados, usamos a String única
+  // Lembre-se: No Render, nós já configuramos essa variável DATABASE_URL nas settings
+  connectionString: process.env.DATABASE_URL, 
+  
+  // AQUI ESTÁ A CORREÇÃO DE SEGURANÇA (O "Carro Forte")
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
 
 pool.connect((err, client, release) => {
     if (err) {
-        return console.error('Erro ao adquirir cliente do banco de dados:', err.stack);
+        return console.error('❌ Erro ao conectar no Banco:', err.stack);
     }
-    console.log('Conexão com PostgreSQL estabelecida com sucesso.');
+    console.log('✅ Conexão com PostgreSQL estabelecida com sucesso!');
     release(); // Libera o cliente de volta ao pool
 });
 

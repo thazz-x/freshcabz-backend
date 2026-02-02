@@ -10,6 +10,19 @@
             "name": "FreshCabz Local",
             "database": "freshcabz_db",
             "username": "thazz"
+        },
+        {
+            "pgOptions": {
+                "ssl": {
+                    "rejectUnauthorized": true
+                }
+            },
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "localhost",
+            "driver": "PostgreSQL",
+            "connectString": "postgresql://freshcabz_postgres_render_user:0dCy54vB3v22s7ujN3CoblTJzhKVnNwd@dpg-d5vjrd8gjchc739d33c0-a.virginia-postgres.render.com/freshcabz_postgres_render",
+            "name": "FreshCabz Render"
         }
     ]
-}
+} 

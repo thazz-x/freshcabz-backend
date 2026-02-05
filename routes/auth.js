@@ -10,16 +10,13 @@ router.post('/signup', async (req, res) => {
   const { name, email, password, phone } = req.body;
 
   try {
-    // 1. Verificar se o usuário já existe
     const userExists = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     if (userExists.rows.length > 0) {
       return res.status(400).json({ msg: 'Usuário com este e-mail já existe.' });
     }
 
-    // 2. Hash da Senha
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // 3. Inserir novo usuário no BD
     const newUser = await pool.query(
       'INSERT INTO users (name, email, password, phone, role) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, email, phone, role',
       [name, email, hashedPassword, phone, 'client']
@@ -27,13 +24,7 @@ router.post('/signup', async (req, res) => {
 
     const user = newUser.rows[0];
 
-    // Gerar Token
-    const payload = { 
-        user: { 
-            id: user.id,
-            role: user.role 
-        } 
-    };
+    const payload = { user: { id: user.id, role: user.role } };
 
     jwt.sign(
       payload,
@@ -41,15 +32,13 @@ router.post('/signup', async (req, res) => {
       { expiresIn: '5d' },
       (err, token) => {
         if (err) throw err;
-        
         res.status(201).json({ 
             msg: 'Cadastro realizado com sucesso!', 
-            token,
-            user: user // O Signup já estava retornando certo porque usa o objeto do banco direto
+            token, 
+            user: user 
         });
       }
     );
-
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Erro no servidor');
@@ -61,7 +50,6 @@ router.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // 1. Procurar o usuário
     const userResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     if (userResult.rows.length === 0) {
       return res.status(401).json({ msg: 'Credenciais inválidas.' }); 
@@ -69,19 +57,12 @@ router.post('/login', async (req, res) => {
 
     const user = userResult.rows[0];
 
-    // 2. Comparar a senha
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ msg: 'Credenciais inválidas.' });
     }
 
-    // 3. Gerar Token
-    const payload = { 
-        user: { 
-            id: user.id,
-            role: user.role
-        } 
-    };
+    const payload = { user: { id: user.id, role: user.role } };
 
     jwt.sign(
       payload,
@@ -90,7 +71,7 @@ router.post('/login', async (req, res) => {
       (err, token) => {
         if (err) throw err;
         
-        // ✅ CORREÇÃO AQUI: Adicionei o PHONE na resposta!
+        // Retorna o usuário COM O TELEFONE para o iOS salvar
         res.json({ 
             token,
             user: { 
@@ -98,12 +79,11 @@ router.post('/login', async (req, res) => {
                 name: user.name, 
                 email: user.email,
                 role: user.role,
-                phone: user.phone // <--- A PEÇA QUE FALTAVA!
+                phone: user.phone 
             } 
         });
       }
     );
-
   } catch (err) {
     console.error(err.message);
     res.status(500).send('Erro no servidor');

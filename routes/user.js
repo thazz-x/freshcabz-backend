@@ -28,7 +28,7 @@ router.put('/update', auth, async (req, res) => {
 
   try{
     const updateUser = await pool.query(
-      'UPDADE users SET name = $1, phone = $2, email = $3 WHERE id = $4 RETURNING id, name, email, phone, role',
+      'UPDATE users SET name = $1, phone = $2, email = $3 WHERE id = $4 RETURNING id, name, email, phone, role',
       [name, phone, email, req.user.id]
     );
     res.json({

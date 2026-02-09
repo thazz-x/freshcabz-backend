@@ -9,15 +9,29 @@ const { createNotification } = require('../utils/notificationHelper');
 router.post('/', auth, async (req, res) => {
     const { 
         service_id, booking_date, booking_time, address, 
-        car_size, final_price, latitude, longitude 
+        car_size, latitude, longitude 
     } = req.body;
-
+   
     try {
+        const priceQuery = await pool.query(
+            'SELECT price FROM service_prices WHERE service_id = $1 AND vehicle_size = $2' ,
+            [service_id, car_size]
+      
+        );
+
+      if  (priceQuery.rows.length === 0) {
+           return res.status(400).json({msg: "preço nao encontrado para este serviço e tamanho de carro." });
+         }
+
+      const realPrice = priceQuery.rows[0].price;
+    
+
+    
         const result = await pool.query(
             `INSERT INTO bookings 
             (client_id, service_id, booking_date, booking_time, address, car_size, final_price, latitude, longitude) 
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-            [req.user.id, service_id, booking_date, booking_time, address, car_size, final_price, latitude, longitude]
+            [req.user.id, service_id, booking_date, booking_time, address, car_size, realPrice, latitude, longitude]
         );
 
         const booking = result.rows[0];

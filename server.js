@@ -13,7 +13,7 @@ require('./config/db');
 
 // 4. Rotas
 const authRoutes = require('./routes/auth');
-const userRoutes = require('./routes/user');
+const userRoutes = require('./routes/users');
 const serviceRoutes = require('./routes/services');
 const bookingRoutes = require('./routes/booking');
 
@@ -26,7 +26,7 @@ app.use(bodyParser.json());
 
 // 7. Rotas
 app.use('/api/auth', authRoutes);
-app.use('/api/user', userRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api/services', serviceRoutes);
 app.use('/api/booking', bookingRoutes);
 

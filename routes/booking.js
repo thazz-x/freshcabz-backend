@@ -152,6 +152,68 @@ router.put('/cancel/:id', auth, async (req, res) => {
     }
 });
 
+// 5. ROTA ADMIN: ATUALIZAR STATUS (Admin Approves or Completes)
+router.put('/:id', auth, async (req, res) => {
+    const bookingId = req.params.id;
+    const { status } = req.body; // 'confirmed', 'completed', 'cancelled'
+
+    // 🛡️ SEGURANÇA: Apenas ADMIN pode usar esta rota genérica
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ msg: 'Access denied. Admins only.' });
+    }
+
+    // Validar se o status enviado é válido
+    const validStatus = ['pending', 'confirmed', 'completed', 'cancelled'];
+    if (!validStatus.includes(status)) {
+        return res.status(400).json({ msg: 'Invalid status' });
+    }
+
+    try {
+        // 1. Verifica se o agendamento existe
+        const bookingCheck = await pool.query('SELECT * FROM bookings WHERE id = $1', [bookingId]);
+        if (bookingCheck.rows.length === 0) {
+            return res.status(404).json({ msg: 'Booking not found' });
+        }
+        
+        const booking = bookingCheck.rows[0];
+
+        // 2. Atualiza o status no Banco de Dados
+        const result = await pool.query(
+            "UPDATE bookings SET status = $1 WHERE id = $2 RETURNING *",
+            [status, bookingId]
+        );
+
+        // 3. 🔔 NOTIFICAÇÕES EM INGLÊS (Para o cliente no iOS)
+        let title = "";
+        let body = "";
+
+        if (status === 'confirmed') {
+            title = "Booking Confirmed! ✅";
+            body = `Your service for ${booking.booking_date} has been approved by our team.`;
+        } else if (status === 'completed') {
+            title = "Service Completed! ✨";
+            body = "Your car is fresh and clean! Thank you for choosing FreshCabz.";
+        } else if (status === 'cancelled') {
+            title = "Booking Update ❌";
+            body = "Your booking has been cancelled by the administrator.";
+        }
+
+        if (title) {
+            await createNotification(booking.client_id, title, body);
+        }
+
+        res.json({ 
+            msg: `Status updated to ${status} successfully!`, 
+            booking: result.rows[0] 
+        });
+
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+
 // --- ROTA DE DISPONIBILIDADE (GET) ---
 router.get('/availability', async (req, res) => {
     try {

@@ -26,7 +26,7 @@ router.get('/', async (req, res) => {
                 ) as prices
             FROM services s
             JOIN service_prices sp ON s.id = sp.service_id
-            WHERE s.is_active = true
+            WHERE s.is_active = true  -- 💡 SÓ MOSTRA OS ATIVOS
             GROUP BY s.id
             ORDER BY s.id ASC;
         `;
@@ -39,7 +39,6 @@ router.get('/', async (req, res) => {
 });
 
 // --- 2. CRIAR NOVO SERVIÇO (POST) ---
-// Cria o serviço e gera automaticamente os preços zerados para os 4 tamanhos
 router.post('/', async (req, res) => {
     const { name, description } = req.body;
     const client = await pool.connect();
@@ -47,8 +46,7 @@ router.post('/', async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // A. Cria o serviço na tabela Pai
-        // Inicializa com JSON vazio para não dar erro no app
+        // Cria serviço ativo
         const serviceRes = await client.query(
             `INSERT INTO services (name, description, duration_minutes, is_active, details_json) 
              VALUES ($1, $2, 60, true, '{"tag":"", "exterior":[], "interior":[]}') 
@@ -57,7 +55,7 @@ router.post('/', async (req, res) => {
         );
         const newServiceId = serviceRes.rows[0].id;
 
-        // B. Cria os preços padrões (zerados) para os 4 tamanhos
+        // Cria preços zerados
         const sizes = ['Small', 'Medium', 'Large', 'X-Large'];
         for (const size of sizes) {
             await client.query(
@@ -80,7 +78,6 @@ router.post('/', async (req, res) => {
 });
 
 // --- 3. ATUALIZAR SERVIÇO (PUT) ---
-// Agora salva Interior e Exterior separadamente
 router.put('/:id', async (req, res) => {
     const { id } = req.params;
     const { name, description, tag, featuresExterior, featuresInterior, prices } = req.body;
@@ -90,11 +87,10 @@ router.put('/:id', async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // A. Monta o JSON completo (Aqui está a mágica da separação)
         const newDetailsJson = {
             tag: tag || "", 
-            exterior: featuresExterior || [], // Lista de fora
-            interior: featuresInterior || []  // Lista de dentro
+            exterior: featuresExterior || [],
+            interior: featuresInterior || []
         };
 
         await client.query(
@@ -104,10 +100,8 @@ router.put('/:id', async (req, res) => {
             [name, description, newDetailsJson, id]
         );
 
-        // B. Atualiza Preços
         if (prices && prices.length > 0) {
             for (const p of prices) {
-                // Garante que lê 'size' (do front) ou 'vehicle_size' (do banco)
                 const sizeValue = p.size || p.vehicle_size; 
                 await client.query(
                     `UPDATE service_prices 
@@ -127,6 +121,20 @@ router.put('/:id', async (req, res) => {
         res.status(500).send('Server Error');
     } finally {
         client.release();
+    }
+});
+
+// --- 4. DELETAR SERVIÇO (SOFT DELETE) ---
+// Arquiva o serviço (is_active = false)
+router.delete('/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        // Não usamos DELETE FROM, usamos UPDATE para segurança do histórico
+        await pool.query('UPDATE services SET is_active = false WHERE id = $1', [id]);
+        res.json({ message: "Service archived successfully" });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Erro ao deletar serviço');
     }
 });
 

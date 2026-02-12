@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 
-// GET /api/services
+// --- 1. LISTAR SERVIÇOS (GET) ---
 router.get('/', async (req, res) => {
     try {
         const query = `
@@ -14,7 +14,7 @@ router.get('/', async (req, res) => {
                 s.details_json, 
                 json_agg(
                     json_build_object(
-                        'size', sp.vehicle_size,  -- 🚨 AQUI ESTAVA O ERRO! Voltei para 'size' para o iPhone ler.
+                        'size', sp.vehicle_size, 
                         'price', sp.price
                     ) ORDER BY 
                         CASE sp.vehicle_size 
@@ -38,20 +38,63 @@ router.get('/', async (req, res) => {
     }
 });
 
-// PUT /api/services/:id (Atualização Segura)
+// --- 2. CRIAR NOVO SERVIÇO (POST) ---
+// Cria o serviço e gera automaticamente os preços zerados para os 4 tamanhos
+router.post('/', async (req, res) => {
+    const { name, description } = req.body;
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        // A. Cria o serviço na tabela Pai
+        // Inicializa com JSON vazio para não dar erro no app
+        const serviceRes = await client.query(
+            `INSERT INTO services (name, description, duration_minutes, is_active, details_json) 
+             VALUES ($1, $2, 60, true, '{"tag":"", "exterior":[], "interior":[]}') 
+             RETURNING id`,
+            [name, description]
+        );
+        const newServiceId = serviceRes.rows[0].id;
+
+        // B. Cria os preços padrões (zerados) para os 4 tamanhos
+        const sizes = ['Small', 'Medium', 'Large', 'X-Large'];
+        for (const size of sizes) {
+            await client.query(
+                `INSERT INTO service_prices (service_id, vehicle_size, price) 
+                 VALUES ($1, $2, 0)`,
+                [newServiceId, size]
+            );
+        }
+
+        await client.query('COMMIT');
+        res.status(201).json({ message: "Service created!", id: newServiceId });
+
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error(err.message);
+        res.status(500).send('Erro ao criar serviço');
+    } finally {
+        client.release();
+    }
+});
+
+// --- 3. ATUALIZAR SERVIÇO (PUT) ---
+// Agora salva Interior e Exterior separadamente
 router.put('/:id', async (req, res) => {
     const { id } = req.params;
-    const { name, description, tag, features, prices } = req.body;
+    const { name, description, tag, featuresExterior, featuresInterior, prices } = req.body;
 
     const client = await pool.connect();
 
     try {
         await client.query('BEGIN');
 
-        // 1. Atualiza JSON de detalhes e informações básicas
+        // A. Monta o JSON completo (Aqui está a mágica da separação)
         const newDetailsJson = {
             tag: tag || "", 
-            exterior: features || [] 
+            exterior: featuresExterior || [], // Lista de fora
+            interior: featuresInterior || []  // Lista de dentro
         };
 
         await client.query(
@@ -61,14 +104,11 @@ router.put('/:id', async (req, res) => {
             [name, description, newDetailsJson, id]
         );
 
-        // 2. Atualiza Preços
-        // O Frontend vai mandar 'size' agora, mas o banco chama 'vehicle_size'.
-        // Fizemos a conversão aqui embaixo:
+        // B. Atualiza Preços
         if (prices && prices.length > 0) {
             for (const p of prices) {
-                // p.size vem do frontend, mas no banco a coluna é vehicle_size
+                // Garante que lê 'size' (do front) ou 'vehicle_size' (do banco)
                 const sizeValue = p.size || p.vehicle_size; 
-
                 await client.query(
                     `UPDATE service_prices 
                      SET price = $1 
@@ -83,7 +123,7 @@ router.put('/:id', async (req, res) => {
 
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error("Erro ao atualizar serviço:", err.message);
+        console.error("Erro ao atualizar:", err.message);
         res.status(500).send('Server Error');
     } finally {
         client.release();

@@ -4,20 +4,50 @@ const pool = require('../config/db');
 const auth = require('../middleware/auth');
 const { createNotification } = require('../utils/notificationHelper');
 
-// 1. BUSCAR AGENDAMENTOS (GET /)
+// --- 1. ROTA DE ESTATÍSTICAS (DASHBOARD) ---
+// Deve vir ANTES das rotas com :id para evitar conflitos de rota
+router.get('/stats', auth, async (req, res) => {
+    // Segurança: Apenas Admin pode ver faturamento
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ msg: 'Access denied.' });
+    }
+
+    try {
+        // Query otimizada: Faz todos os cálculos no banco (mais rápido e seguro)
+        const query = `
+            SELECT 
+                COALESCE(SUM(CASE WHEN booking_date = CURRENT_DATE THEN CAST(final_price AS DECIMAL) ELSE 0 END), 0) as today,
+                COALESCE(SUM(CASE WHEN booking_date >= date_trunc('week', CURRENT_DATE)::date THEN CAST(final_price AS DECIMAL) ELSE 0 END), 0) as week,
+                COALESCE(SUM(CASE WHEN booking_date >= date_trunc('month', CURRENT_DATE)::date THEN CAST(final_price AS DECIMAL) ELSE 0 END), 0) as month,
+                COUNT(*) FILTER (WHERE status = 'completed') as total_completed_count
+            FROM bookings 
+            WHERE status = 'completed'
+        `;
+
+        const result = await pool.query(query);
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error("Error in GET /stats:", err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// --- 2. BUSCAR AGENDAMENTOS (LISTAGEM) ---
 router.get('/', auth, async (req, res) => {
     try {
         let query;
         let params = [];
 
         if (req.user.role === 'admin') {
+            // Admin vê tudo. Ordenado por ID decrescente (mais novos primeiro)
             query = `
                 SELECT b.*, s.name as service_name, u.name as client_name, u.phone as client_phone 
                 FROM bookings b 
                 LEFT JOIN services s ON b.service_id = s.id 
                 LEFT JOIN users u ON b.client_id = u.id 
-                ORDER BY b.created_at DESC`;
+                ORDER BY b.id DESC`;
         } else {
+            // Cliente vê apenas os seus
             query = `
                 SELECT b.*, s.name as service_name 
                 FROM bookings b 
@@ -35,42 +65,7 @@ router.get('/', auth, async (req, res) => {
     }
 });
 
-// [NOVO] 1.1 ESTATÍSTICAS FINANCEIRAS (Dashboard)
-// IMPORTANTE: Esta rota deve vir ANTES de router.put('/:id')
-router.get('/stats', auth, async (req, res) => {
-    if (req.user.role !== 'admin') {
-        return res.status(403).json({ msg: 'Access denied.' });
-    }
-
-    try {
-        const query = `
-            SELECT 
-                COALESCE(SUM(CASE 
-                    WHEN booking_date = CURRENT_DATE 
-                    THEN final_price ELSE 0 END), 0) as today,
-                
-                COALESCE(SUM(CASE 
-                    WHEN booking_date >= date_trunc('week', CURRENT_DATE) 
-                    THEN final_price ELSE 0 END), 0) as week,
-                
-                COALESCE(SUM(CASE 
-                    WHEN booking_date >= date_trunc('month', CURRENT_DATE) 
-                    THEN final_price ELSE 0 END), 0) as month,
-                
-                COUNT(*) FILTER (WHERE status = 'completed') as total_completed_count
-            FROM bookings 
-            WHERE status = 'completed'
-        `;
-
-        const result = await pool.query(query);
-        res.json(result.rows[0]);
-    } catch (err) {
-        console.error("Error in GET /stats:", err.message);
-        res.status(500).send('Server Error');
-    }
-});
-
-// 2. CRIAR AGENDAMENTO
+// --- 3. CRIAR AGENDAMENTO ---
 router.post('/', auth, async (req, res) => {
     const { 
         service_id, booking_date, booking_time, address, 
@@ -78,13 +73,14 @@ router.post('/', auth, async (req, res) => {
     } = req.body;
    
     try {
+        // Segurança: Busca o preço no servidor, não confia no frontend
         const priceQuery = await pool.query(
             'SELECT price FROM service_prices WHERE service_id = $1 AND vehicle_size = $2',
             [service_id, car_size]
         );
 
         if (priceQuery.rows.length === 0) {
-            return res.status(400).json({ msg: "Price not found for this service and car size." });
+            return res.status(400).json({ msg: "Price not found for this configuration." });
         }
 
         const realPrice = priceQuery.rows[0].price;
@@ -96,28 +92,27 @@ router.post('/', auth, async (req, res) => {
             [req.user.id, service_id, booking_date, booking_time, address, car_size, realPrice, latitude, longitude]
         );
 
-        const booking = result.rows[0];
-
+        // Envia notificação para o Admin (ou para o próprio user confirmando)
         await createNotification(
             req.user.id, 
             "Booking Received ✅", 
-            `We received your request for ${booking_date} at ${booking_time}. Waiting for approval.`
+            `We received your request for ${booking_date}. Waiting for approval.`
         );
 
-        res.status(201).json({ msg: "Booking created successfully!", booking });
+        res.status(201).json({ msg: "Booking created successfully!", booking: result.rows[0] });
     } catch (err) {
         console.error(err);
         res.status(500).send('Server Error');
     }
 });
 
-// 3. ATUALIZAR STATUS (Admin)
+// --- 4. ATUALIZAR STATUS (ADMIN) ---
 router.put('/:id', auth, async (req, res) => {
     const bookingId = req.params.id;
     const { status } = req.body;
 
     if (req.user.role !== 'admin') {
-        return res.status(403).json({ msg: 'Access denied. Admins only.' });
+        return res.status(403).json({ msg: 'Access denied.' });
     }
 
     const validStatus = ['pending', 'confirmed', 'completed', 'cancelled'];
@@ -126,87 +121,69 @@ router.put('/:id', auth, async (req, res) => {
     }
 
     try {
-        const bookingCheck = await pool.query('SELECT * FROM bookings WHERE id = $1', [bookingId]);
-        if (bookingCheck.rows.length === 0) return res.status(404).json({ msg: 'Booking not found' });
-        
-        const booking = bookingCheck.rows[0];
-
         const result = await pool.query(
             "UPDATE bookings SET status = $1 WHERE id = $2 RETURNING *",
             [status, bookingId]
         );
 
+        if (result.rows.length === 0) return res.status(404).json({ msg: 'Booking not found' });
+        
+        const booking = result.rows[0];
+
+        // Notificações Inteligentes
         let title = "";
         let body = "";
-
         if (status === 'confirmed') {
             title = "Booking Confirmed! ✅";
-            body = `Your service for ${booking.booking_date} has been approved.`;
+            body = `Your service for ${booking.booking_date} is confirmed.`;
         } else if (status === 'completed') {
             title = "Service Completed! ✨";
-            body = "Your car is fresh and clean! Thank you for choosing FreshCabz.";
+            body = "Your car is fresh! Thank you for choosing FreshCabz.";
         }
 
         if (title) await createNotification(booking.client_id, title, body);
 
-        res.json({ msg: `Status updated to ${status}`, booking: result.rows[0] });
+        res.json({ msg: `Status updated to ${status}`, booking });
     } catch (err) {
         console.error(err);
         res.status(500).send('Server Error');
     }
 });
 
-// 4. DETAILER ACEITA
+// --- 5. DETAILER ACEITA TRABALHO ---
 router.put('/accept/:id', auth, async (req, res) => {
-    const bookingId = req.params.id;
-    const detailerId = req.user.id;
-
     if (req.user.role !== 'detailer') return res.status(403).json({ msg: 'Access denied.' });
-
+    
     try {
-        const bookingCheck = await pool.query('SELECT * FROM bookings WHERE id = $1', [bookingId]);
-        if (bookingCheck.rows.length === 0) return res.status(404).json({ msg: 'Not found' });
-        
-        const booking = bookingCheck.rows[0];
-        if (booking.status !== 'pending') return res.status(400).json({ msg: 'Job no longer available.' });
+        // Verifica se ainda está pendente antes de aceitar
+        const check = await pool.query("SELECT status FROM bookings WHERE id = $1", [req.params.id]);
+        if (check.rows.length === 0) return res.status(404).json({ msg: 'Not found' });
+        if (check.rows[0].status !== 'pending') return res.status(400).json({ msg: 'Job already taken.' });
 
         const update = await pool.query(
             "UPDATE bookings SET detailer_id = $1, status = 'confirmed' WHERE id = $2 RETURNING *",
-            [detailerId, bookingId]
+            [req.user.id, req.params.id]
         );
-
-        await createNotification(booking.client_id, "Detailer Found! 🚗", "A pro has accepted your job!");
 
         res.json({ msg: "Job accepted!", booking: update.rows[0] });
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// 5. CANCELAR
+// --- 6. CANCELAR ---
 router.put('/cancel/:id', auth, async (req, res) => {
-    const bookingId = req.params.id;
     try {
-        const bookingCheck = await pool.query('SELECT * FROM bookings WHERE id = $1', [bookingId]);
-        if (bookingCheck.rows.length === 0) return res.status(404).json({ msg: 'Not found' });
-        
-        const booking = bookingCheck.rows[0];
-        await pool.query("UPDATE bookings SET status = 'cancelled' WHERE id = $1", [bookingId]);
-
-        await createNotification(booking.client_id, "Booking Cancelled ❌", "Your service has been cancelled.");
-
+        await pool.query("UPDATE bookings SET status = 'cancelled' WHERE id = $1", [req.params.id]);
         res.json({ msg: "Cancelled successfully" });
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// --- ROTAS DE SUPORTE ---
-
+// --- ROTAS AUXILIARES ---
 router.get('/history', auth, async (req, res) => {
     const userId = req.user.id;
-    const userRole = req.user.role;
     try {
-        let query = userRole === 'client' 
+        const query = req.user.role === 'client' 
             ? 'SELECT b.*, s.name as service_name FROM bookings b JOIN services s ON b.service_id = s.id WHERE b.client_id = $1 ORDER BY b.booking_date DESC'
-            : 'SELECT b.*, s.name as service_name, u.name as client_name FROM bookings b JOIN services s ON b.service_id = s.id JOIN users u ON b.client_id = u.id WHERE b.detailer_id = $1 ORDER BY b.booking_date ASC';
-            
+            : 'SELECT b.*, s.name as service_name FROM bookings b JOIN services s ON b.service_id = s.id WHERE b.detailer_id = $1 ORDER BY b.booking_date ASC';
         const result = await pool.query(query, [userId]);
         res.json(result.rows);
     } catch(err) { res.status(500).send('Server Error'); }
@@ -214,8 +191,7 @@ router.get('/history', auth, async (req, res) => {
 
 router.get('/availability', async (req, res) => {
     try {
-        const { date } = req.query;
-        const result = await pool.query("SELECT booking_time FROM bookings WHERE booking_date = $1 AND status != 'cancelled'", [date]);
+        const result = await pool.query("SELECT booking_time FROM bookings WHERE booking_date = $1 AND status != 'cancelled'", [req.query.date]);
         res.json(result.rows.map(row => row.booking_time));
     } catch(err) { res.status(500).send('Server Error'); }
 });

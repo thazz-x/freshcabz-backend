@@ -5,14 +5,12 @@ const auth = require('../middleware/auth');
 const { createNotification } = require('../utils/notificationHelper');
 
 // 1. BUSCAR AGENDAMENTOS (GET /)
-// Esta é a rota que o Dashboard usa. Admin vê tudo, Cliente vê apenas os seus.
 router.get('/', auth, async (req, res) => {
     try {
         let query;
         let params = [];
 
         if (req.user.role === 'admin') {
-            // 👮 ADMIN: Busca TODOS os agendamentos com nomes de clientes e serviços
             query = `
                 SELECT b.*, s.name as service_name, u.name as client_name, u.phone as client_phone 
                 FROM bookings b 
@@ -20,7 +18,6 @@ router.get('/', auth, async (req, res) => {
                 LEFT JOIN users u ON b.client_id = u.id 
                 ORDER BY b.created_at DESC`;
         } else {
-            // 👤 CLIENTE: Busca apenas os agendamentos vinculados ao seu ID
             query = `
                 SELECT b.*, s.name as service_name 
                 FROM bookings b 
@@ -38,7 +35,42 @@ router.get('/', auth, async (req, res) => {
     }
 });
 
-// 2. CRIAR AGENDAMENTO (Client Creates Booking)
+// [NOVO] 1.1 ESTATÍSTICAS FINANCEIRAS (Dashboard)
+// IMPORTANTE: Esta rota deve vir ANTES de router.put('/:id')
+router.get('/stats', auth, async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ msg: 'Access denied.' });
+    }
+
+    try {
+        const query = `
+            SELECT 
+                COALESCE(SUM(CASE 
+                    WHEN booking_date = CURRENT_DATE 
+                    THEN final_price ELSE 0 END), 0) as today,
+                
+                COALESCE(SUM(CASE 
+                    WHEN booking_date >= date_trunc('week', CURRENT_DATE) 
+                    THEN final_price ELSE 0 END), 0) as week,
+                
+                COALESCE(SUM(CASE 
+                    WHEN booking_date >= date_trunc('month', CURRENT_DATE) 
+                    THEN final_price ELSE 0 END), 0) as month,
+                
+                COUNT(*) FILTER (WHERE status = 'completed') as total_completed_count
+            FROM bookings 
+            WHERE status = 'completed'
+        `;
+
+        const result = await pool.query(query);
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error("Error in GET /stats:", err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// 2. CRIAR AGENDAMENTO
 router.post('/', auth, async (req, res) => {
     const { 
         service_id, booking_date, booking_time, address, 
@@ -79,8 +111,7 @@ router.post('/', auth, async (req, res) => {
     }
 });
 
-// 3. ATUALIZAR STATUS (Admin Approves or Completes)
-// Usado pelos botões de ação no Dashboard
+// 3. ATUALIZAR STATUS (Admin)
 router.put('/:id', auth, async (req, res) => {
     const bookingId = req.params.id;
     const { status } = req.body;
@@ -105,7 +136,6 @@ router.put('/:id', auth, async (req, res) => {
             [status, bookingId]
         );
 
-        // Notificações em Inglês para o App iOS
         let title = "";
         let body = "";
 
@@ -126,7 +156,7 @@ router.put('/:id', auth, async (req, res) => {
     }
 });
 
-// 4. DETAILER ACEITA (Detailer Accepts Job)
+// 4. DETAILER ACEITA
 router.put('/accept/:id', auth, async (req, res) => {
     const bookingId = req.params.id;
     const detailerId = req.user.id;
@@ -151,7 +181,7 @@ router.put('/accept/:id', auth, async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// 5. CANCELAR (Cancel Booking)
+// 5. CANCELAR
 router.put('/cancel/:id', auth, async (req, res) => {
     const bookingId = req.params.id;
     try {
@@ -167,7 +197,7 @@ router.put('/cancel/:id', auth, async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// --- ROTAS DE SUPORTE (Histórico, Disponibilidade, etc) ---
+// --- ROTAS DE SUPORTE ---
 
 router.get('/history', auth, async (req, res) => {
     const userId = req.user.id;

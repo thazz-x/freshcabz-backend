@@ -26,7 +26,8 @@ router.get('/', async (req, res) => {
                 ) as prices
             FROM services s
             JOIN service_prices sp ON s.id = sp.service_id
-            WHERE s.is_active = true  -- 💡 SÓ MOSTRA OS ATIVOS
+            WHERE s.is_active = true 
+            AND sp.vehicle_size IN ('Small', 'Medium', 'Large') -- 🔒 Garante que só esses 3 tamanhos saiam do banco
             GROUP BY s.id
             ORDER BY s.id ASC;
         `;
@@ -34,7 +35,7 @@ router.get('/', async (req, res) => {
         res.json(result.rows);
     } catch (err) {
         console.error(err.message);
-        res.status(500).send('Erro ao buscar serviços');
+        res.status(500).send('Erro ao buscar serviços no banco de dados');
     }
 });
 
@@ -55,8 +56,9 @@ router.post('/', async (req, res) => {
         );
         const newServiceId = serviceRes.rows[0].id;
 
-        // Cria preços zerados
-        const sizes = ['Small', 'Medium', 'Large', 'X-Large'];
+        // ✅ CORREÇÃO: Removido 'X-Large' da lista de tamanhos.
+        const sizes = ['Small', 'Medium', 'Large']; 
+        
         for (const size of sizes) {
             await client.query(
                 `INSERT INTO service_prices (service_id, vehicle_size, price) 
@@ -102,13 +104,17 @@ router.put('/:id', async (req, res) => {
 
         if (prices && prices.length > 0) {
             for (const p of prices) {
-                const sizeValue = p.size || p.vehicle_size; 
-                await client.query(
-                    `UPDATE service_prices 
-                     SET price = $1 
-                     WHERE service_id = $2 AND vehicle_size = $3`,
-                    [p.price, id, sizeValue]
-                );
+                const sizeValue = p.size || p.vehicle_size;
+                
+                // 🔒 Segurança extra: Só processa o update se não for X-Large
+                if (sizeValue !== 'X-Large') {
+                    await client.query(
+                        `UPDATE service_prices 
+                         SET price = $1 
+                         WHERE service_id = $2 AND vehicle_size = $3`,
+                        [p.price, id, sizeValue]
+                    );
+                }
             }
         }
 
@@ -125,11 +131,9 @@ router.put('/:id', async (req, res) => {
 });
 
 // --- 4. DELETAR SERVIÇO (SOFT DELETE) ---
-// Arquiva o serviço (is_active = false)
 router.delete('/:id', async (req, res) => {
     const { id } = req.params;
     try {
-        // Não usamos DELETE FROM, usamos UPDATE para segurança do histórico
         await pool.query('UPDATE services SET is_active = false WHERE id = $1', [id]);
         res.json({ message: "Service archived successfully" });
     } catch (err) {

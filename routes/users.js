@@ -34,7 +34,6 @@ router.put('/update', auth, async (req, res) => {
   }
 
   try {
-    // Evita que eu mude meu email para um que já existe em outra conta
     const emailCheck = await pool.query(
         'SELECT * FROM users WHERE email = $1 AND id != $2',
         [email, req.user.id]
@@ -60,10 +59,45 @@ router.put('/update', auth, async (req, res) => {
 // 👮 SEÇÃO ADMINISTRATIVA (Apenas para Admins)
 // ==========================================
 
-// 3. LIST ALL USERS (Opção 4 do Painel)
-// Traz todos os usuários e conta quantos agendamentos cada um já fez
+// [NOVA ROTA] 3. LISTA DE CLIENTES + TOTAL GASTO (Usada na Página Clients)
+router.get('/clients', auth, async (req, res) => {
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ msg: 'Access denied. Admins only.' });
+    }
+
+    try {
+        // Query Blindada: Soma apenas serviços 'completed' e limpa o texto do preço
+        const query = `
+            SELECT 
+                u.id, 
+                u.name, 
+                u.email, 
+                u.phone, 
+                u.role,
+                COUNT(b.id) FILTER (WHERE b.status = 'completed') as total_services,
+                COALESCE(SUM(CASE 
+                    WHEN b.status = 'completed' 
+                    THEN NULLIF(regexp_replace(b.final_price::text, '[^0-9.]', '', 'g'), '')::numeric 
+                    ELSE 0 
+                END), 0) as total_spent
+            FROM users u
+            LEFT JOIN bookings b ON u.id = b.client_id
+            WHERE u.role = 'client'
+            GROUP BY u.id
+            ORDER BY total_spent DESC
+        `;
+
+        const result = await pool.query(query);
+        res.json(result.rows);
+
+    } catch (err) {
+        console.error("Erro na rota /clients:", err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
+// 4. LIST ALL USERS (Genérico - Mantido para compatibilidade)
 router.get('/', auth, async (req, res) => {
-    // Bloqueio de segurança: Se não for admin, nem tenta ler o banco
     if (req.user.role !== 'admin') {
         return res.status(403).json({ msg: 'Access denied. Admins only.' });
     }
@@ -86,12 +120,11 @@ router.get('/', auth, async (req, res) => {
     }
 });
 
-// 4. CHANGE USER ROLE (Promover/Rebaixar usuário)
-// Útil para transformar um Cliente em Detailer no sistema
+// 5. CHANGE USER ROLE (Promover/Rebaixar)
 router.put('/role/:id', auth, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ msg: 'Access denied.' });
 
-    const { newRole } = req.body; // 'client', 'detailer' ou 'admin'
+    const { newRole } = req.body; 
     const userId = req.params.id;
 
     try {
@@ -102,18 +135,17 @@ router.put('/role/:id', auth, async (req, res) => {
     }
 });
 
-// 5. DELETE USER (Banir usuário do sistema)
+// 6. DELETE USER (Banir)
 router.delete('/:id', auth, async (req, res) => {
     if (req.user.role !== 'admin') return res.status(403).json({ msg: 'Access denied.' });
 
     const userId = req.params.id;
 
     try {
-        // Nota: Isso pode falhar se o usuário tiver agendamentos (Foreign Key Constraint)
-        // Por segurança, no futuro podemos usar "soft delete" (desativar a conta)
         await pool.query('DELETE FROM users WHERE id = $1', [userId]);
         res.json({ msg: 'User deleted successfully' });
     } catch (err) {
+        // Se falhar (por ter agendamentos), avisa o front
         res.status(500).json({ msg: 'Cannot delete user with active bookings.' });
     }
 });

@@ -29,6 +29,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/services', serviceRoutes);
 app.use('/api/booking', bookingRoutes);
+app.use('/api/upload', require('./routes/upload'));
 
 // Rota de teste simples para saber se o servidor está vivo
 app.get('/', (req, res) => {

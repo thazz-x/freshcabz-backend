@@ -52,17 +52,27 @@ router.post('/', auth, async (req, res) => {
     } catch (err) { res.status(500).send('Server Error'); }
 });
 
-// 3. ATUALIZAR STATUS (SEM MUDANÇAS)
+// 3. ATUALIZAR STATUS (ADICIONADO admin_notes AQUI)
 router.put('/:id', auth, async (req, res) => {
     const bookingId = req.params.id;
-    const { status } = req.body;
+    // ✨ Aqui recebemos o admin_notes do React
+    const { status, admin_notes } = req.body; 
+    
     if (req.user.role !== 'admin') return res.status(403).json({ msg: 'Access denied.' });
+    
     try {
-        const result = await pool.query("UPDATE bookings SET status = $1 WHERE id = $2 RETURNING *", [status, bookingId]);
+        // ✨ E aqui inserimos o admin_notes na query do banco
+        const result = await pool.query(
+            "UPDATE bookings SET status = $1, admin_notes = $2 WHERE id = $3 RETURNING *", 
+            [status, admin_notes || null, bookingId]
+        );
+        
         if (result.rows.length === 0) return res.status(404).json({ msg: 'Not found' });
         const booking = result.rows[0];
+        
         if (status === 'confirmed') await createNotification(booking.client_id, "Confirmed", "Service approved.");
         if (status === 'completed') await createNotification(booking.client_id, "Completed", "Service done.");
+        
         res.json({ msg: `Status updated to ${status}`, booking });
     } catch (err) { res.status(500).send('Server Error'); }
 });

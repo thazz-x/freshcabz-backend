@@ -150,4 +150,17 @@ router.delete('/:id', auth, async (req, res) => {
     }
 });
 
+router.delete('/me', auth, async (req, res) => {
+    try {
+        // Deleta o usuário (o banco de dados deve ter CASCADE nas foreign keys 
+        // para deletar os bookings dele também, ou você pode atualizar o status dos bookings).
+        await pool.query("DELETE FROM users WHERE id = $1", [req.user.id]);
+        
+        res.json({ msg: "Account successfully deleted" });
+    } catch (err) {
+        console.error("Error deleting account:", err.message);
+        res.status(500).send('Server Error');
+    }
+});
+
 module.exports = router;

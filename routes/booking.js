@@ -111,9 +111,30 @@ router.get('/history', auth, async (req, res) => {
 
 router.get('/availability', async (req, res) => {
     try {
-        const result = await pool.query("SELECT booking_time FROM bookings WHERE booking_date = $1 AND status != 'cancelled'", [req.query.date]);
+        const { date } = req.query;
+
+        // 1. Verifica no painel de admin quantos detailers estão escalados (padrão é 2 se não achar nada)
+        const capResult = await pool.query(
+            "SELECT COALESCE((SELECT total_detailers FROM daily_capacity WHERE work_date = $1), 2) as max_detailers",
+            [date]
+        );
+        const maxDetailers = capResult.rows[0].max_detailers;
+
+        // 2. Busca os horários, conta quantos agendamentos existem, e SÓ bloqueia se atingir o limite de detailers
+        const result = await pool.query(`
+            SELECT booking_time 
+            FROM bookings 
+            WHERE booking_date = $1 AND status != 'cancelled'
+            GROUP BY booking_time
+            HAVING COUNT(*) >= $2
+        `, [date, maxDetailers]);
+
+        // 3. Devolve exatamente o mesmo formato que você já usava (ex: ["10:00", "14:30"])
         res.json(result.rows.map(row => row.booking_time));
-    } catch(err) { res.status(500).send('Server Error'); }
+    } catch(err) { 
+        console.error("Erro na rota availability:", err);
+        res.status(500).send('Server Error'); 
+    }
 });
 
 module.exports = router;

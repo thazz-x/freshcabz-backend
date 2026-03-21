@@ -16,6 +16,7 @@ const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const serviceRoutes = require('./routes/services');
 const bookingRoutes = require('./routes/booking');
+const adminRoutes = require('./routes/admin');
 
 // 5. App
 const app = express();
